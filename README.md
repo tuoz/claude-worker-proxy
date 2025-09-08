@@ -56,3 +56,20 @@ curl -X POST https://claude-worker-proxy.xxxx.workers.dev/gemini/https://generat
 
 claude
 ```
+
+---
+
+<table>
+  <tr>
+    <td align="center">
+      <img src="https://github.com/glidea/zenfeed/blob/main/docs/images/wechat.png?raw=true" alt="Wechat QR Code" width="300">
+      <br>
+      <strong>AI 学习交流社群</strong>
+    </td>
+    <td align="center">
+      <img src="https://github.com/glidea/zenfeed/blob/main/docs/images/sponsor.png?raw=true" width="500">
+      <br>
+      <strong><a href="https://afdian.com/a/glidea">请杯奶茶 🧋</a></strong>
+    </td>
+  </tr>
+</table>
