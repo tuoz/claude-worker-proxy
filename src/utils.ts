@@ -122,6 +122,34 @@ export function buildUrl(baseUrl: string, endpoint: string): string {
     return finalUrl + endpoint
 }
 
+export class HttpError extends Error {
+    response: Response
+
+    constructor(response: Response) {
+        super(response.statusText || 'HTTP error')
+        this.response = response
+    }
+}
+
+export function badRequest(message: string): never {
+    throw new HttpError(new Response(message, { status: 400 }))
+}
+
+export function isHttpError(error: unknown): error is HttpError {
+    return error instanceof HttpError
+}
+
+export function arrayBufferToBase64(buffer: ArrayBuffer): string {
+    let binary = ''
+    const bytes = new Uint8Array(buffer)
+
+    for (let i = 0; i < bytes.length; i++) {
+        binary += String.fromCharCode(bytes[i])
+    }
+
+    return btoa(binary)
+}
+
 export async function processProviderStream(
     providerResponse: Response,
     processLine: (jsonStr: string, state: ProviderStreamState) => ProviderStreamState | null

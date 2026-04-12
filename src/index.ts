@@ -1,6 +1,7 @@
 import * as provider from './provider'
 import * as gemini from './gemini'
 import * as openai from './openai'
+import * as utils from './utils'
 
 const PROVIDER_BASE_URLS = {
     gemini: 'https://generativelanguage.googleapis.com/v1beta',
@@ -12,6 +13,9 @@ export default {
         try {
             return await handle(request)
         } catch (error) {
+            if (utils.isHttpError(error)) {
+                return error.response
+            }
             console.error(error)
             return new Response('Internal server error', { status: 500 })
         }

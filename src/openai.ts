@@ -121,14 +121,20 @@ export class impl implements provider.Provider {
                 continue
             }
 
-            const textContents: string[] = []
+            const contentParts: types.OpenAIContentPart[] = []
             const toolCalls: types.OpenAIToolCall[] = []
             const toolResults: Array<{ tool_call_id: string; content: string }> = []
 
             for (const content of message.content) {
                 switch (content.type) {
                     case 'text':
-                        textContents.push(content.text)
+                        contentParts.push({ type: 'text', text: content.text })
+                        break
+                    case 'image':
+                        if (message.role === 'assistant') {
+                            utils.badRequest('Image content is only supported in user messages')
+                        }
+                        contentParts.push(this.convertImagePart(content))
                         break
                     case 'tool_use':
                         toolCalls.push({
@@ -150,13 +156,16 @@ export class impl implements provider.Provider {
                 }
             }
 
-            if (textContents.length > 0 || toolCalls.length > 0) {
+            if (contentParts.length > 0 || toolCalls.length > 0) {
                 const openaiMessage: types.OpenAIMessage = {
                     role: message.role === 'assistant' ? 'assistant' : 'user'
                 }
 
-                if (textContents.length > 0) {
-                    openaiMessage.content = textContents.join('\n')
+                if (contentParts.length > 0) {
+                    openaiMessage.content =
+                        contentParts.length === 1 && contentParts[0].type === 'text'
+                            ? contentParts[0].text
+                            : contentParts
                 }
 
                 if (toolCalls.length > 0) {
@@ -178,6 +187,29 @@ export class impl implements provider.Provider {
         return openaiMessages
     }
 
+    private convertImagePart(content: Extract<types.ClaudeContentBlock, { type: 'image' }>): types.OpenAIContentPart {
+        switch (content.source.type) {
+            case 'base64':
+                return {
+                    type: 'image_url',
+                    image_url: {
+                        url: `data:${content.source.media_type};base64,${content.source.data}`
+                    }
+                }
+            case 'url':
+                return {
+                    type: 'image_url',
+                    image_url: {
+                        url: content.source.url
+                    }
+                }
+            case 'file':
+                utils.badRequest('Anthropic file image sources are not supported by this proxy')
+        }
+
+        utils.badRequest('Unsupported image source type')
+    }
+
     private async convertNormalResponse(openaiResponse: Response): Promise<Response> {
         const openaiData = (await openaiResponse.json()) as types.OpenAIResponse
 
@@ -192,7 +224,7 @@ export class impl implements provider.Provider {
             const choice = openaiData.choices[0]
             const message = choice.message
 
-            if (message.content) {
+            if (typeof message.content === 'string') {
                 claudeResponse.content.push({
                     type: 'text',
                     text: message.content

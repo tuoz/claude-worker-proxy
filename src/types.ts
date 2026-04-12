@@ -16,13 +16,19 @@ export interface ClaudeTool {
     input_schema: JsonSchema
 }
 
-export type ClaudeContent =
-    | string
-    | Array<
-          | { type: 'text'; text: string }
-          | { type: 'tool_use'; id: string; name: string; input: any }
-          | { type: 'tool_result'; tool_use_id: string; content: string; is_error?: boolean }
-      >
+export type ClaudeContentBlock =
+    | { type: 'text'; text: string }
+    | {
+          type: 'image'
+          source:
+              | { type: 'base64'; media_type: string; data: string }
+              | { type: 'url'; url: string }
+              | { type: 'file'; file_id: string }
+      }
+    | { type: 'tool_use'; id: string; name: string; input: any }
+    | { type: 'tool_result'; tool_use_id: string; content: string; is_error?: boolean }
+
+export type ClaudeContent = string | ClaudeContentBlock[]
 
 export interface ClaudeMessage {
     role: 'user' | 'assistant'
@@ -66,6 +72,7 @@ export interface GeminiTool {
 
 export type GeminiPart =
     | { text: string; thought?: boolean; thoughtSignature?: string }
+    | { inlineData: { mimeType: string; data: string } }
     | { functionCall: { id?: string; name: string; args: any }; thoughtSignature?: string }
     | { functionResponse: { id?: string; name: string; response: any } }
 
@@ -139,10 +146,12 @@ export interface ClaudeStreamEvent {
 
 export interface OpenAIMessage {
     role: 'system' | 'user' | 'assistant' | 'tool'
-    content?: string | null
+    content?: string | null | OpenAIContentPart[]
     tool_calls?: OpenAIToolCall[]
     tool_call_id?: string
 }
+
+export type OpenAIContentPart = { type: 'text'; text: string } | { type: 'image_url'; image_url: { url: string } }
 
 export interface OpenAIToolCall {
     id: string

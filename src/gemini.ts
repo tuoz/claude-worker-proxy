@@ -5,7 +5,7 @@ import * as utils from './utils'
 export class impl implements provider.Provider {
     async convertToProviderRequest(request: Request, baseUrl: string, apiKey: string): Promise<Request> {
         const claudeRequest = (await request.json()) as types.ClaudeRequest
-        const geminiRequest = this.convertToGeminiRequestBody(claudeRequest)
+        const geminiRequest = await this.convertToGeminiRequestBody(claudeRequest)
 
         const endpoint = `models/${claudeRequest.model}:${claudeRequest.stream ? 'streamGenerateContent?alt=sse' : 'generateContent'}`
         const finalUrl = utils.buildUrl(baseUrl, endpoint)
@@ -36,9 +36,9 @@ export class impl implements provider.Provider {
         }
     }
 
-    private convertToGeminiRequestBody(claudeRequest: types.ClaudeRequest): types.GeminiRequest {
+    private async convertToGeminiRequestBody(claudeRequest: types.ClaudeRequest): Promise<types.GeminiRequest> {
         const toolUseMap = this.buildToolUseMap(claudeRequest.messages)
-        const contents = this.convertMessages(claudeRequest.messages, toolUseMap)
+        const contents = await this.convertMessages(claudeRequest.messages, toolUseMap)
 
         const geminiRequest: types.GeminiRequest = {
             contents
@@ -145,7 +145,10 @@ export class impl implements provider.Provider {
         return toolUseMap
     }
 
-    private convertMessages(messages: types.ClaudeMessage[], toolUseMap: Map<string, string>): types.GeminiContent[] {
+    private async convertMessages(
+        messages: types.ClaudeMessage[],
+        toolUseMap: Map<string, string>
+    ): Promise<types.GeminiContent[]> {
         const contents: types.GeminiContent[] = []
 
         for (const message of messages) {
@@ -157,17 +160,27 @@ export class impl implements provider.Provider {
                 continue
             }
 
-            const textParts: types.GeminiPart[] = []
-            const toolUseParts: types.GeminiPart[] = []
+            const modelParts: types.GeminiPart[] = []
+            const userParts: types.GeminiPart[] = []
             const toolResultParts: types.GeminiPart[] = []
 
             for (const content of message.content) {
                 switch (content.type) {
                     case 'text':
-                        textParts.push({ text: content.text })
+                        if (message.role === 'assistant') {
+                            modelParts.push({ text: content.text })
+                        } else {
+                            userParts.push({ text: content.text })
+                        }
+                        break
+                    case 'image':
+                        if (message.role === 'assistant') {
+                            utils.badRequest('Image content is only supported in user messages')
+                        }
+                        userParts.push(await this.convertImagePart(content))
                         break
                     case 'tool_use':
-                        toolUseParts.push({
+                        modelParts.push({
                             functionCall: {
                                 id: content.id,
                                 name: content.name,
@@ -190,9 +203,9 @@ export class impl implements provider.Provider {
                 }
             }
 
-            if (textParts.length > 0 || toolUseParts.length > 0) {
+            if (modelParts.length > 0 || userParts.length > 0) {
                 contents.push({
-                    parts: [...textParts, ...toolUseParts],
+                    parts: message.role === 'assistant' ? modelParts : userParts,
                     role: message.role === 'assistant' ? 'model' : 'user'
                 })
             }
@@ -206,6 +219,56 @@ export class impl implements provider.Provider {
         }
 
         return contents
+    }
+
+    private async convertImagePart(
+        content: Extract<types.ClaudeContentBlock, { type: 'image' }>
+    ): Promise<types.GeminiPart> {
+        switch (content.source.type) {
+            case 'base64':
+                return {
+                    inlineData: {
+                        mimeType: content.source.media_type,
+                        data: content.source.data
+                    }
+                }
+            case 'url':
+                return await this.fetchImagePart(content.source.url)
+            case 'file':
+                utils.badRequest('Anthropic file image sources are not supported by this proxy')
+        }
+
+        utils.badRequest('Unsupported image source type')
+    }
+
+    private async fetchImagePart(url: string): Promise<types.GeminiPart> {
+        let parsedUrl: URL
+        try {
+            parsedUrl = new URL(url)
+        } catch {
+            utils.badRequest('Image URL must be a valid URL')
+        }
+
+        if (parsedUrl.protocol !== 'http:' && parsedUrl.protocol !== 'https:') {
+            utils.badRequest('Image URL must use http or https')
+        }
+
+        const response = await fetch(parsedUrl)
+        if (!response.ok) {
+            utils.badRequest(`Image URL fetch failed with status ${response.status}`)
+        }
+
+        const contentType = response.headers.get('content-type')?.split(';')[0]?.trim()
+        if (!contentType || !contentType.startsWith('image/')) {
+            utils.badRequest('Image URL must return an image content-type')
+        }
+
+        return {
+            inlineData: {
+                mimeType: contentType,
+                data: utils.arrayBufferToBase64(await response.arrayBuffer())
+            }
+        }
     }
 
     private async convertNormalResponse(geminiResponse: Response): Promise<Response> {
