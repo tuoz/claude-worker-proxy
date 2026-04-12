@@ -1,9 +1,13 @@
 export interface JsonSchema {
-    type?: 'object' | 'string' | 'number' | 'boolean' | 'array'
+    [key: string]: any
+    type?: 'object' | 'string' | 'number' | 'integer' | 'boolean' | 'array' | null
     properties?: { [key: string]: JsonSchema }
     required?: string[]
     description?: string
-    items?: JsonSchema
+    items?: JsonSchema | JsonSchema[]
+    enum?: any[]
+    anyOf?: JsonSchema[]
+    nullable?: boolean
 }
 
 export interface ClaudeTool {
@@ -32,6 +36,10 @@ export interface ClaudeRequest {
     temperature?: number
     stream?: boolean
     tools?: ClaudeTool[]
+    system?: string | Array<{ type: 'text'; text: string }>
+    stop_sequences?: string[]
+    top_p?: number
+    tool_choice?: { type: 'auto' } | { type: 'any' } | { type: 'none' } | { type: 'tool'; name: string }
 }
 
 export interface ClaudeResponse {
@@ -57,22 +65,30 @@ export interface GeminiTool {
 }
 
 export type GeminiPart =
-    | { text: string }
-    | { functionCall: { name: string; args: any } }
-    | { functionResponse: { name: string; response: any } }
+    | { text: string; thought?: boolean; thoughtSignature?: string }
+    | { functionCall: { id?: string; name: string; args: any }; thoughtSignature?: string }
+    | { functionResponse: { id?: string; name: string; response: any } }
 
 export interface GeminiContent {
     parts: GeminiPart[]
-    role?: 'user' | 'model' | 'tool'
+    role?: 'user' | 'model'
 }
 
 export interface GeminiRequest {
-    model?: string
     contents: GeminiContent[]
     tools?: GeminiTool[]
+    systemInstruction?: GeminiContent
     generationConfig?: {
         temperature?: number
         maxOutputTokens?: number
+        stopSequences?: string[]
+        topP?: number
+    }
+    toolConfig?: {
+        functionCallingConfig: {
+            mode?: 'AUTO' | 'ANY' | 'NONE'
+            allowedFunctionNames?: string[]
+        }
     }
 }
 
@@ -150,8 +166,12 @@ export interface OpenAIRequest {
     model: string
     messages: OpenAIMessage[]
     tools?: OpenAITool[]
+    tool_choice?: any
     temperature?: number
     max_tokens?: number
+    max_completion_tokens?: number
+    stop?: string[]
+    top_p?: number
     stream?: boolean
 }
 

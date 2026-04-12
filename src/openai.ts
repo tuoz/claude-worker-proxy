@@ -38,7 +38,7 @@ export class impl implements provider.Provider {
     private convertToOpenAIRequestBody(claudeRequest: types.ClaudeRequest): types.OpenAIRequest {
         const openaiRequest: types.OpenAIRequest = {
             model: claudeRequest.model,
-            messages: this.convertMessages(claudeRequest.messages),
+            messages: this.convertMessages(claudeRequest.messages, claudeRequest.system),
             stream: claudeRequest.stream
         }
 
@@ -48,9 +48,14 @@ export class impl implements provider.Provider {
                 function: {
                     name: tool.name,
                     description: tool.description,
-                    parameters: utils.cleanJsonSchema(tool.input_schema)
+                    parameters: utils.cleanOpenAIFunctionSchema(tool.input_schema)
                 }
             }))
+        }
+
+        const toolChoice = this.convertToolChoice(claudeRequest.tool_choice)
+        if (toolChoice) {
+            openaiRequest.tool_choice = toolChoice
         }
 
         if (claudeRequest.temperature !== undefined) {
@@ -58,15 +63,54 @@ export class impl implements provider.Provider {
         }
 
         if (claudeRequest.max_tokens !== undefined) {
-            openaiRequest.max_tokens = claudeRequest.max_tokens
+            openaiRequest.max_completion_tokens = claudeRequest.max_tokens
+        }
+
+        if (claudeRequest.stop_sequences !== undefined) {
+            openaiRequest.stop = claudeRequest.stop_sequences
+        }
+
+        if (claudeRequest.top_p !== undefined) {
+            openaiRequest.top_p = claudeRequest.top_p
         }
 
         return openaiRequest
     }
 
-    private convertMessages(claudeMessages: types.ClaudeMessage[]): types.OpenAIMessage[] {
+    private convertToolChoice(toolChoice: types.ClaudeRequest['tool_choice']): any {
+        if (!toolChoice) {
+            return undefined
+        }
+
+        switch (toolChoice.type) {
+            case 'auto':
+            case 'none':
+                return toolChoice.type
+            case 'any':
+                return 'required'
+            case 'tool':
+                return {
+                    type: 'function',
+                    function: {
+                        name: toolChoice.name
+                    }
+                }
+        }
+    }
+
+    private convertMessages(
+        claudeMessages: types.ClaudeMessage[],
+        system: types.ClaudeRequest['system']
+    ): types.OpenAIMessage[] {
         const openaiMessages: types.OpenAIMessage[] = []
-        const toolCallMap = new Map<string, string>()
+
+        const systemContent = this.convertSystemContent(system)
+        if (systemContent) {
+            openaiMessages.push({
+                role: 'system',
+                content: systemContent
+            })
+        }
 
         for (const message of claudeMessages) {
             if (typeof message.content === 'string') {
@@ -87,7 +131,6 @@ export class impl implements provider.Provider {
                         textContents.push(content.text)
                         break
                     case 'tool_use':
-                        toolCallMap.set(content.id, content.id)
                         toolCalls.push({
                             id: content.id,
                             type: 'function',
@@ -162,7 +205,7 @@ export class impl implements provider.Provider {
                         type: 'tool_use',
                         id: toolCall.id,
                         name: toolCall.function.name,
-                        input: JSON.parse(toolCall.function.arguments)
+                        input: this.parseToolArguments(toolCall.function.arguments)
                     })
                 }
                 claudeResponse.stop_reason = 'tool_use'
@@ -188,8 +231,37 @@ export class impl implements provider.Provider {
         })
     }
 
+    private convertSystemContent(system: types.ClaudeRequest['system']): string | undefined {
+        if (!system) {
+            return undefined
+        }
+
+        if (typeof system === 'string') {
+            return system
+        }
+
+        const text = system
+            .filter(content => content.type === 'text' && content.text)
+            .map(content => content.text)
+            .join('\n')
+
+        return text || undefined
+    }
+
+    private parseToolArguments(rawArguments: string | undefined): any {
+        if (!rawArguments) {
+            return {}
+        }
+
+        try {
+            return JSON.parse(rawArguments)
+        } catch {
+            return {}
+        }
+    }
+
     private async convertStreamResponse(openaiResponse: Response): Promise<Response> {
-        return utils.processProviderStream(openaiResponse, (jsonStr, textBlockIndex, toolUseBlockIndex) => {
+        return utils.processProviderStream(openaiResponse, (jsonStr, state) => {
             const openaiData = JSON.parse(jsonStr) as types.OpenAIStreamResponse
             if (!openaiData.choices || openaiData.choices.length === 0) {
                 return null
@@ -198,36 +270,77 @@ export class impl implements provider.Provider {
             const choice = openaiData.choices[0]
             const delta = choice.delta
             const events: string[] = []
-            let currentTextIndex = textBlockIndex
-            let currentToolIndex = toolUseBlockIndex
+            let nextState: utils.ProviderStreamState = {
+                ...state,
+                events,
+                toolCalls: state.toolCalls || {}
+            }
 
             if (delta.content) {
-                events.push(...utils.processTextPart(delta.content, currentTextIndex))
-                currentTextIndex++
+                if (nextState.openTextBlockIndex === undefined) {
+                    nextState.openTextBlockIndex = nextState.textBlockIndex
+                    nextState.textBlockIndex++
+                    events.push(utils.startTextPart(nextState.openTextBlockIndex))
+                }
+                events.push(utils.processTextDelta(delta.content, nextState.openTextBlockIndex))
             }
 
             if (delta.tool_calls) {
                 for (const toolCall of delta.tool_calls) {
-                    if (toolCall.function?.name && toolCall.function?.arguments) {
-                        events.push(
-                            ...utils.processToolUsePart(
-                                {
-                                    name: toolCall.function.name,
-                                    args: JSON.parse(toolCall.function.arguments)
-                                },
-                                currentToolIndex
-                            )
-                        )
-                        currentToolIndex++
+                    const existing = nextState.toolCalls?.[toolCall.index] || { arguments: '' }
+                    if (toolCall.id) {
+                        existing.id = toolCall.id
                     }
+                    if (toolCall.function?.name) {
+                        existing.name = toolCall.function.name
+                    }
+                    if (toolCall.function?.arguments) {
+                        existing.arguments += toolCall.function.arguments
+                    }
+                    nextState.toolCalls![toolCall.index] = existing
                 }
             }
 
-            return {
-                events,
-                textBlockIndex: currentTextIndex,
-                toolUseBlockIndex: currentToolIndex
+            if (choice.finish_reason === 'tool_calls' && nextState.toolCalls) {
+                if (nextState.openTextBlockIndex !== undefined) {
+                    events.push(utils.stopContentBlock(nextState.openTextBlockIndex))
+                    nextState.openTextBlockIndex = undefined
+                }
+
+                for (const toolCall of Object.values(nextState.toolCalls)) {
+                    if (!toolCall.name) continue
+
+                    events.push(
+                        ...utils.processToolUsePart(
+                            {
+                                id: toolCall.id,
+                                name: toolCall.name,
+                                args: this.parseToolArguments(toolCall.arguments)
+                            },
+                            nextState.toolUseBlockIndex
+                        )
+                    )
+                    nextState.toolUseBlockIndex++
+                }
+                nextState.toolCalls = {}
             }
+
+            if (choice.finish_reason) {
+                nextState.stopReason = this.convertFinishReason(choice.finish_reason)
+            }
+
+            return nextState
         })
+    }
+
+    private convertFinishReason(finishReason: string): 'end_turn' | 'tool_use' | 'max_tokens' {
+        switch (finishReason) {
+            case 'tool_calls':
+                return 'tool_use'
+            case 'length':
+                return 'max_tokens'
+            default:
+                return 'end_turn'
+        }
     }
 }

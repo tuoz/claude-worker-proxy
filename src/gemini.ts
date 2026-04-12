@@ -41,8 +41,12 @@ export class impl implements provider.Provider {
         const contents = this.convertMessages(claudeRequest.messages, toolUseMap)
 
         const geminiRequest: types.GeminiRequest = {
-            model: claudeRequest.model,
             contents
+        }
+
+        const systemInstruction = this.convertSystemInstruction(claudeRequest.system)
+        if (systemInstruction) {
+            geminiRequest.systemInstruction = systemInstruction
         }
 
         if (claudeRequest.tools && claudeRequest.tools.length > 0) {
@@ -51,13 +55,23 @@ export class impl implements provider.Provider {
                     functionDeclarations: claudeRequest.tools.map(tool => ({
                         name: tool.name,
                         description: tool.description,
-                        parameters: utils.cleanJsonSchema(tool.input_schema)
+                        parameters: utils.cleanGeminiFunctionSchema(tool.input_schema)
                     }))
                 }
             ]
         }
 
-        if (claudeRequest.temperature !== undefined || claudeRequest.max_tokens !== undefined) {
+        const toolConfig = this.convertToolChoice(claudeRequest.tool_choice)
+        if (toolConfig) {
+            geminiRequest.toolConfig = toolConfig
+        }
+
+        if (
+            claudeRequest.temperature !== undefined ||
+            claudeRequest.max_tokens !== undefined ||
+            claudeRequest.stop_sequences !== undefined ||
+            claudeRequest.top_p !== undefined
+        ) {
             geminiRequest.generationConfig = {}
             if (claudeRequest.temperature !== undefined) {
                 geminiRequest.generationConfig.temperature = claudeRequest.temperature
@@ -65,9 +79,54 @@ export class impl implements provider.Provider {
             if (claudeRequest.max_tokens !== undefined) {
                 geminiRequest.generationConfig.maxOutputTokens = claudeRequest.max_tokens
             }
+            if (claudeRequest.stop_sequences !== undefined) {
+                geminiRequest.generationConfig.stopSequences = claudeRequest.stop_sequences
+            }
+            if (claudeRequest.top_p !== undefined) {
+                geminiRequest.generationConfig.topP = claudeRequest.top_p
+            }
         }
 
         return geminiRequest
+    }
+
+    private convertSystemInstruction(system: types.ClaudeRequest['system']): types.GeminiContent | undefined {
+        if (!system) {
+            return undefined
+        }
+
+        if (typeof system === 'string') {
+            return {
+                parts: [{ text: system }]
+            }
+        }
+
+        const parts = system
+            .filter(content => content.type === 'text' && content.text)
+            .map(content => ({ text: content.text }))
+
+        if (parts.length === 0) {
+            return undefined
+        }
+
+        return { parts }
+    }
+
+    private convertToolChoice(toolChoice: types.ClaudeRequest['tool_choice']): types.GeminiRequest['toolConfig'] {
+        if (!toolChoice) {
+            return undefined
+        }
+
+        switch (toolChoice.type) {
+            case 'auto':
+                return { functionCallingConfig: { mode: 'AUTO' } }
+            case 'any':
+                return { functionCallingConfig: { mode: 'ANY' } }
+            case 'none':
+                return { functionCallingConfig: { mode: 'NONE' } }
+            case 'tool':
+                return { functionCallingConfig: { mode: 'ANY', allowedFunctionNames: [toolChoice.name] } }
+        }
     }
 
     private buildToolUseMap(messages: types.ClaudeMessage[]): Map<string, string> {
@@ -110,6 +169,7 @@ export class impl implements provider.Provider {
                     case 'tool_use':
                         toolUseParts.push({
                             functionCall: {
+                                id: content.id,
                                 name: content.name,
                                 args: content.input
                             }
@@ -120,6 +180,7 @@ export class impl implements provider.Provider {
                         if (functionName) {
                             toolResultParts.push({
                                 functionResponse: {
+                                    id: content.tool_use_id,
                                     name: functionName,
                                     response: { content: content.content }
                                 }
@@ -139,7 +200,7 @@ export class impl implements provider.Provider {
             if (toolResultParts.length > 0) {
                 contents.push({
                     parts: toolResultParts,
-                    role: 'tool'
+                    role: 'user'
                 })
             }
         }
@@ -162,7 +223,7 @@ export class impl implements provider.Provider {
             let hasToolUse = false
 
             for (const part of candidate.content.parts) {
-                if ('text' in part) {
+                if ('text' in part && !part.thought) {
                     claudeResponse.content.push({
                         type: 'text',
                         text: part.text
@@ -171,7 +232,7 @@ export class impl implements provider.Provider {
                     hasToolUse = true
                     claudeResponse.content.push({
                         type: 'tool_use',
-                        id: utils.generateId(),
+                        id: part.functionCall.id || utils.generateId(),
                         name: part.functionCall.name,
                         input: part.functionCall.args
                     })
@@ -203,7 +264,7 @@ export class impl implements provider.Provider {
     }
 
     private async convertStreamResponse(geminiResponse: Response): Promise<Response> {
-        return utils.processProviderStream(geminiResponse, (jsonStr, textBlockIndex, toolUseBlockIndex) => {
+        return utils.processProviderStream(geminiResponse, (jsonStr, state) => {
             const geminiData = JSON.parse(jsonStr) as types.GeminiResponse
             if (!geminiData.candidates || geminiData.candidates.length === 0) {
                 return null
@@ -211,26 +272,52 @@ export class impl implements provider.Provider {
 
             const candidate = geminiData.candidates[0]
             const events: string[] = []
-            let currentTextIndex = textBlockIndex
-            let currentToolIndex = toolUseBlockIndex
+            let nextState: utils.ProviderStreamState = { ...state, events }
 
             if (candidate.content) {
                 for (const part of candidate.content.parts) {
-                    if ('text' in part && part.text) {
-                        events.push(...utils.processTextPart(part.text, currentTextIndex))
-                        currentTextIndex++
+                    if ('text' in part && part.text && !part.thought) {
+                        if (nextState.openTextBlockIndex === undefined) {
+                            nextState.openTextBlockIndex = nextState.textBlockIndex
+                            nextState.textBlockIndex++
+                            events.push(utils.startTextPart(nextState.openTextBlockIndex))
+                        }
+                        events.push(utils.processTextDelta(part.text, nextState.openTextBlockIndex))
                     } else if ('functionCall' in part) {
-                        events.push(...utils.processToolUsePart(part.functionCall, currentToolIndex))
-                        currentToolIndex++
+                        if (nextState.openTextBlockIndex !== undefined) {
+                            events.push(utils.stopContentBlock(nextState.openTextBlockIndex))
+                            nextState.openTextBlockIndex = undefined
+                        }
+                        events.push(...utils.processToolUsePart(part.functionCall, nextState.toolUseBlockIndex))
+                        nextState.toolUseBlockIndex++
+                        nextState.stopReason = 'tool_use'
                     }
                 }
             }
 
-            return {
-                events,
-                textBlockIndex: currentTextIndex,
-                toolUseBlockIndex: currentToolIndex
+            if (geminiData.usageMetadata) {
+                nextState.usage = {
+                    input_tokens: geminiData.usageMetadata.promptTokenCount,
+                    output_tokens: geminiData.usageMetadata.candidatesTokenCount
+                }
             }
+
+            if (candidate.finishReason && nextState.stopReason !== 'tool_use') {
+                nextState.stopReason = this.convertFinishReason(candidate.finishReason)
+            }
+
+            return nextState
         })
+    }
+
+    private convertFinishReason(finishReason: string): 'end_turn' | 'tool_use' | 'max_tokens' {
+        switch (finishReason) {
+            case 'MAX_TOKENS':
+                return 'max_tokens'
+            case 'STOP':
+                return 'end_turn'
+            default:
+                return 'end_turn'
+        }
     }
 }

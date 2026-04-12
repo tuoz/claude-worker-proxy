@@ -22,44 +22,63 @@ export function sendMessageStop(controller: ReadableStreamDefaultController): vo
     controller.enqueue(new TextEncoder().encode(event))
 }
 
+export function sendMessageDelta(
+    controller: ReadableStreamDefaultController,
+    stopReason: string,
+    usage?: { input_tokens?: number; output_tokens?: number }
+): void {
+    const event = `event: message_delta\ndata: ${JSON.stringify({
+        type: 'message_delta',
+        delta: {
+            stop_reason: stopReason
+        },
+        usage
+    })}\n\n`
+    controller.enqueue(new TextEncoder().encode(event))
+}
+
+export function startTextPart(index: number): string {
+    return `event: content_block_start\ndata: ${JSON.stringify({
+        type: 'content_block_start',
+        index,
+        content_block: {
+            type: 'text',
+            text: ''
+        }
+    })}\n\n`
+}
+
+export function processTextDelta(text: string, index: number): string {
+    return `event: content_block_delta\ndata: ${JSON.stringify({
+        type: 'content_block_delta',
+        index,
+        delta: {
+            type: 'text_delta',
+            text
+        }
+    })}\n\n`
+}
+
+export function stopContentBlock(index: number): string {
+    return `event: content_block_stop\ndata: ${JSON.stringify({
+        type: 'content_block_stop',
+        index
+    })}\n\n`
+}
+
 export function processTextPart(text: string, index: number): string[] {
     const events: string[] = []
 
-    events.push(
-        `event: content_block_start\ndata: ${JSON.stringify({
-            type: 'content_block_start',
-            index,
-            content_block: {
-                type: 'text',
-                text: ''
-            }
-        })}\n\n`
-    )
-
-    events.push(
-        `event: content_block_delta\ndata: ${JSON.stringify({
-            type: 'content_block_delta',
-            index,
-            delta: {
-                type: 'text_delta',
-                text
-            }
-        })}\n\n`
-    )
-
-    events.push(
-        `event: content_block_stop\ndata: ${JSON.stringify({
-            type: 'content_block_stop',
-            index
-        })}\n\n`
-    )
+    events.push(startTextPart(index))
+    events.push(processTextDelta(text, index))
+    events.push(stopContentBlock(index))
 
     return events
 }
 
-export function processToolUsePart(functionCall: { name: string; args: any }, index: number): string[] {
+export function processToolUsePart(functionCall: { id?: string; name: string; args: any }, index: number): string[] {
     const events: string[] = []
-    const toolUseId = generateId()
+    const toolUseId = functionCall.id || generateId()
 
     events.push(
         `event: content_block_start\ndata: ${JSON.stringify({
@@ -105,11 +124,7 @@ export function buildUrl(baseUrl: string, endpoint: string): string {
 
 export async function processProviderStream(
     providerResponse: Response,
-    processLine: (
-        jsonStr: string,
-        textIndex: number,
-        toolIndex: number
-    ) => { events: string[]; textBlockIndex: number; toolUseBlockIndex: number } | null
+    processLine: (jsonStr: string, state: ProviderStreamState) => ProviderStreamState | null
 ): Promise<Response> {
     const stream = new ReadableStream({
         async start(controller) {
@@ -121,8 +136,10 @@ export async function processProviderStream(
 
             const decoder = new TextDecoder()
             let buffer = ''
-            let textBlockIndex = 0
-            let toolUseBlockIndex = 0
+            let state: ProviderStreamState = {
+                textBlockIndex: 0,
+                toolUseBlockIndex: 0
+            }
 
             sendMessageStart(controller)
 
@@ -137,32 +154,18 @@ export async function processProviderStream(
                     buffer = lines.pop() || ''
 
                     for (const line of lines) {
-                        if (!line.trim() || !line.startsWith('data: ')) continue
-
-                        const jsonStr = line.slice(6)
-                        if (jsonStr === '[DONE]') continue
-
-                        const result = processLine(jsonStr, textBlockIndex, toolUseBlockIndex)
-                        if (result) {
-                            textBlockIndex = result.textBlockIndex
-                            toolUseBlockIndex = result.toolUseBlockIndex
-
-                            for (const event of result.events) {
-                                controller.enqueue(new TextEncoder().encode(event))
-                            }
-                        }
+                        state = processStreamLine(line, state, processLine, controller)
                     }
                 }
             } finally {
-                if (buffer.trim()) {
-                    const result = processLine(buffer.slice(6), textBlockIndex, toolUseBlockIndex)
-                    if (result) {
-                        for (const event of result.events) {
-                            controller.enqueue(new TextEncoder().encode(event))
-                        }
-                    }
+                if (buffer.trim() && buffer.startsWith('data: ')) {
+                    state = processStreamLine(buffer, state, processLine, controller)
+                }
+                if (state.openTextBlockIndex !== undefined) {
+                    controller.enqueue(new TextEncoder().encode(stopContentBlock(state.openTextBlockIndex)))
                 }
                 reader.releaseLock()
+                sendMessageDelta(controller, state.stopReason || 'end_turn', state.usage)
                 sendMessageStop(controller)
                 controller.close()
             }
@@ -179,27 +182,118 @@ export async function processProviderStream(
     })
 }
 
-export function cleanJsonSchema(schema: any): any {
+export interface ProviderStreamState {
+    textBlockIndex: number
+    toolUseBlockIndex: number
+    openTextBlockIndex?: number
+    stopReason?: string
+    usage?: {
+        input_tokens?: number
+        output_tokens?: number
+    }
+    toolCalls?: Record<number, { id?: string; name?: string; arguments: string }>
+    events?: string[]
+}
+
+function processStreamLine(
+    line: string,
+    state: ProviderStreamState,
+    processLine: (jsonStr: string, state: ProviderStreamState) => ProviderStreamState | null,
+    controller: ReadableStreamDefaultController
+): ProviderStreamState {
+    if (!line.trim() || !line.startsWith('data: ')) return state
+
+    const jsonStr = line.slice(6)
+    if (jsonStr === '[DONE]') return state
+
+    const result = processLine(jsonStr, state)
+    if (!result) return state
+
+    for (const event of result.events || []) {
+        controller.enqueue(new TextEncoder().encode(event))
+    }
+
+    const { events, ...nextState } = result
+    return nextState
+}
+
+const GEMINI_UNSUPPORTED_SCHEMA_KEYS = new Set([
+    '$schema',
+    'additionalProperties',
+    'title',
+    'examples',
+    'propertyNames',
+    'patternProperties',
+    'unevaluatedProperties',
+    'dependencies',
+    'dependentSchemas',
+    'if',
+    'then',
+    'else',
+    'allOf',
+    'exclusiveMinimum',
+    'exclusiveMaximum',
+    'default'
+])
+
+const OPENAI_DROP_SCHEMA_KEYS = new Set(['$schema'])
+
+export function cleanGeminiFunctionSchema(schema: any): any {
+    if (Array.isArray(schema)) {
+        return schema.map(item => cleanGeminiFunctionSchema(item))
+    }
+
     if (!schema || typeof schema !== 'object') {
         return schema
     }
 
-    const cleaned = { ...schema }
+    const cleaned: Record<string, any> = {}
 
-    for (const key in cleaned) {
-        if (key === '$schema' || key === 'additionalProperties' || key === 'title' || key === 'examples') {
-            delete cleaned[key]
-        } else if (key === 'enum' && Array.isArray(cleaned[key])) {
-            cleaned[key] = cleaned[key]
-        } else if (key === 'format' && cleaned.type === 'string') {
-            delete cleaned[key]
-        } else if (key === 'properties' && typeof cleaned[key] === 'object') {
-            cleaned[key] = cleanJsonSchema(cleaned[key])
-        } else if (key === 'items' && typeof cleaned[key] === 'object') {
-            cleaned[key] = cleanJsonSchema(cleaned[key])
-        } else if (typeof cleaned[key] === 'object' && !Array.isArray(cleaned[key])) {
-            cleaned[key] = cleanJsonSchema(cleaned[key])
+    for (const [key, value] of Object.entries(schema)) {
+        if (GEMINI_UNSUPPORTED_SCHEMA_KEYS.has(key)) {
+            continue
         }
+
+        if (key === 'const') {
+            if (typeof value === 'string' && !Array.isArray(cleaned.enum)) {
+                cleaned.type = cleaned.type || 'string'
+                cleaned.enum = [value]
+            }
+            continue
+        }
+
+        if (key === 'oneOf') {
+            cleaned.anyOf = cleanGeminiFunctionSchema(value)
+            continue
+        }
+
+        if (key === 'format' && schema.type === 'string') {
+            continue
+        }
+
+        cleaned[key] = cleanGeminiFunctionSchema(value)
+    }
+
+    return cleaned
+}
+
+export function cleanOpenAIFunctionSchema(schema: any): any {
+    if (Array.isArray(schema)) {
+        return schema.map(item => cleanOpenAIFunctionSchema(item))
+    }
+
+    if (!schema || typeof schema !== 'object') {
+        return schema
+    }
+
+    const cleaned: Record<string, any> = {}
+
+    for (const [key, value] of Object.entries(schema)) {
+        if (OPENAI_DROP_SCHEMA_KEYS.has(key)) {
+            continue
+        }
+
+        cleaned[key] = cleanOpenAIFunctionSchema(value)
     }
 
     return cleaned
