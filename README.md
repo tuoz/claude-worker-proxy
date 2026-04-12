@@ -57,7 +57,6 @@ curl -X POST https://claude-worker-proxy.xxxx.workers.dev/gemini/v1/messages \
 claude
 ```
 
-
 ---
 
 <table>
