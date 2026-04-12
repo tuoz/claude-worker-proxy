@@ -324,8 +324,8 @@ export class impl implements provider.Provider {
 
             if (delta.content) {
                 if (nextState.openTextBlockIndex === undefined) {
-                    nextState.openTextBlockIndex = nextState.textBlockIndex
-                    nextState.textBlockIndex++
+                    nextState.openTextBlockIndex = nextState.nextBlockIndex
+                    nextState.nextBlockIndex++
                     events.push(utils.startTextPart(nextState.openTextBlockIndex))
                 }
                 events.push(utils.processTextDelta(delta.content, nextState.openTextBlockIndex))
@@ -363,10 +363,10 @@ export class impl implements provider.Provider {
                                 name: toolCall.name,
                                 args: this.parseToolArguments(toolCall.arguments)
                             },
-                            nextState.toolUseBlockIndex
+                            nextState.nextBlockIndex
                         )
                     )
-                    nextState.toolUseBlockIndex++
+                    nextState.nextBlockIndex++
                 }
                 nextState.toolCalls = {}
             }

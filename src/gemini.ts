@@ -329,20 +329,28 @@ export class impl implements provider.Provider {
     private async convertStreamResponse(geminiResponse: Response): Promise<Response> {
         return utils.processProviderStream(geminiResponse, (jsonStr, state) => {
             const geminiData = JSON.parse(jsonStr) as types.GeminiResponse
+            const events: string[] = []
+            let nextState: utils.ProviderStreamState = { ...state, events }
+
+            if (geminiData.usageMetadata) {
+                nextState.usage = {
+                    input_tokens: geminiData.usageMetadata.promptTokenCount,
+                    output_tokens: geminiData.usageMetadata.candidatesTokenCount
+                }
+            }
+
             if (!geminiData.candidates || geminiData.candidates.length === 0) {
-                return null
+                return nextState
             }
 
             const candidate = geminiData.candidates[0]
-            const events: string[] = []
-            let nextState: utils.ProviderStreamState = { ...state, events }
 
             if (candidate.content) {
                 for (const part of candidate.content.parts) {
                     if ('text' in part && part.text && !part.thought) {
                         if (nextState.openTextBlockIndex === undefined) {
-                            nextState.openTextBlockIndex = nextState.textBlockIndex
-                            nextState.textBlockIndex++
+                            nextState.openTextBlockIndex = nextState.nextBlockIndex
+                            nextState.nextBlockIndex++
                             events.push(utils.startTextPart(nextState.openTextBlockIndex))
                         }
                         events.push(utils.processTextDelta(part.text, nextState.openTextBlockIndex))
@@ -351,17 +359,10 @@ export class impl implements provider.Provider {
                             events.push(utils.stopContentBlock(nextState.openTextBlockIndex))
                             nextState.openTextBlockIndex = undefined
                         }
-                        events.push(...utils.processToolUsePart(part.functionCall, nextState.toolUseBlockIndex))
-                        nextState.toolUseBlockIndex++
+                        events.push(...utils.processToolUsePart(part.functionCall, nextState.nextBlockIndex))
+                        nextState.nextBlockIndex++
                         nextState.stopReason = 'tool_use'
                     }
-                }
-            }
-
-            if (geminiData.usageMetadata) {
-                nextState.usage = {
-                    input_tokens: geminiData.usageMetadata.promptTokenCount,
-                    output_tokens: geminiData.usageMetadata.candidatesTokenCount
                 }
             }
 

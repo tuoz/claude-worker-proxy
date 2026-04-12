@@ -9,7 +9,10 @@ export function sendMessageStart(controller: ReadableStreamDefaultController): v
             id: generateId(),
             type: 'message',
             role: 'assistant',
-            content: []
+            content: [],
+            stop_reason: null,
+            stop_sequence: null,
+            usage: normalizeUsage()
         }
     })}\n\n`
     controller.enqueue(new TextEncoder().encode(event))
@@ -30,11 +33,22 @@ export function sendMessageDelta(
     const event = `event: message_delta\ndata: ${JSON.stringify({
         type: 'message_delta',
         delta: {
-            stop_reason: stopReason
+            stop_reason: stopReason,
+            stop_sequence: null
         },
-        usage
+        usage: normalizeUsage(usage)
     })}\n\n`
     controller.enqueue(new TextEncoder().encode(event))
+}
+
+function normalizeUsage(usage?: { input_tokens?: number; output_tokens?: number }): {
+    input_tokens: number
+    output_tokens: number
+} {
+    return {
+        input_tokens: usage?.input_tokens ?? 0,
+        output_tokens: usage?.output_tokens ?? 0
+    }
 }
 
 export function startTextPart(index: number): string {
@@ -165,8 +179,7 @@ export async function processProviderStream(
             const decoder = new TextDecoder()
             let buffer = ''
             let state: ProviderStreamState = {
-                textBlockIndex: 0,
-                toolUseBlockIndex: 0
+                nextBlockIndex: 0
             }
 
             sendMessageStart(controller)
@@ -211,8 +224,7 @@ export async function processProviderStream(
 }
 
 export interface ProviderStreamState {
-    textBlockIndex: number
-    toolUseBlockIndex: number
+    nextBlockIndex: number
     openTextBlockIndex?: number
     stopReason?: string
     usage?: {
