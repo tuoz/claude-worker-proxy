@@ -42,6 +42,12 @@ export class impl implements provider.Provider {
             stream: claudeRequest.stream
         }
 
+        if (claudeRequest.stream) {
+            openaiRequest.stream_options = {
+                include_usage: true
+            }
+        }
+
         if (claudeRequest.tools && claudeRequest.tools.length > 0) {
             openaiRequest.tools = claudeRequest.tools.map(tool => ({
                 type: 'function',
@@ -295,18 +301,26 @@ export class impl implements provider.Provider {
     private async convertStreamResponse(openaiResponse: Response): Promise<Response> {
         return utils.processProviderStream(openaiResponse, (jsonStr, state) => {
             const openaiData = JSON.parse(jsonStr) as types.OpenAIStreamResponse
-            if (!openaiData.choices || openaiData.choices.length === 0) {
-                return null
-            }
-
-            const choice = openaiData.choices[0]
-            const delta = choice.delta
             const events: string[] = []
             let nextState: utils.ProviderStreamState = {
                 ...state,
                 events,
                 toolCalls: state.toolCalls || {}
             }
+
+            if (openaiData.usage) {
+                nextState.usage = {
+                    input_tokens: openaiData.usage.prompt_tokens,
+                    output_tokens: openaiData.usage.completion_tokens
+                }
+            }
+
+            if (!openaiData.choices || openaiData.choices.length === 0) {
+                return nextState
+            }
+
+            const choice = openaiData.choices[0]
+            const delta = choice.delta
 
             if (delta.content) {
                 if (nextState.openTextBlockIndex === undefined) {

@@ -182,6 +182,9 @@ export interface OpenAIRequest {
     stop?: string[]
     top_p?: number
     stream?: boolean
+    stream_options?: {
+        include_usage?: boolean
+    }
 }
 
 export interface OpenAIChoice {
@@ -227,4 +230,9 @@ export interface OpenAIStreamResponse {
     created: number
     model: string
     choices: OpenAIStreamChoice[]
+    usage?: {
+        prompt_tokens: number
+        completion_tokens: number
+        total_tokens: number
+    } | null
 }
