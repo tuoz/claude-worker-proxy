@@ -1,82 +1,155 @@
-把各家（Gemini，OpenAI）的模型 API 转换成 Claude 格式提供服务
+# claude-worker-proxy
 
-## 特性
+一个运行在 Cloudflare Workers 上的轻量代理，在 Claude Messages API 风格请求和 Gemini / OpenAI 兼容接口之间做转换。
 
-- 🚀 一键部署到 Cloudflare Workers
-- 🔄 兼容 Claude Code。配合 [One-Balance](https://github.com/glidea/one-balance) 低成本，0 费用使用 Claude Code
-- 📡 支持流式和非流式响应
-- 🛠️ 支持工具调用
-- 🎯 零配置，开箱即用
+上游仓库：[glidea/claude-worker-proxy](https://github.com/glidea/claude-worker-proxy)
 
-## 快速部署
+## 功能
+
+- 支持 `POST /gemini/v1/messages` 和 `POST /openai/v1/messages`
+- 支持普通响应和流式响应
+- 支持 `system`、`messages`、`temperature`、`max_tokens`、`stop_sequences`、`top_p`
+- 支持工具调用：`tools`、`tool_choice`、`tool_use`、`tool_result`
+- 支持用户消息里的图片输入
+  - Gemini：支持 `base64` 和可访问的 `http/https` 图片 URL，Worker 会先抓取并转为 `inlineData`
+  - OpenAI：支持 `base64` 和图片 URL，其中 URL 直接透传给上游
+- 使用请求头里的原始 API key 访问目标厂商，不在 Worker 中保存模型 API Key
+
+## 工作方式
+
+请求路径决定目标厂商：
+
+| 路径 | 目标接口 |
+| --- | --- |
+| `/gemini/v1/messages` | `https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent` 或流式接口 |
+| `/openai/v1/messages` | `https://api.openai.com/v1/chat/completions` |
+
+请求体使用 Claude Messages API 的常见字段。Worker 会根据路径转换请求体、鉴权头和响应格式。
+
+## 环境要求
+
+- Node.js & npm
+- `npm install`
+- Cloudflare Wrangler 登录状态；首次使用建议先执行 `wrangler login`
+
+## 本地开发
+
+启动本地服务：
 
 ```bash
-git clone https://github.com/glidea/claude-worker-proxy
-cd claude-worker-proxy
-npm install
-wrangler login # 如果尚未安装：npm i -g wrangler@latest
+npm run dev
+```
+
+默认会监听 `http://localhost:8080`。
+
+## 部署
+
+部署到 Cloudflare Workers：
+
+```bash
 npm run deploycf
 ```
 
-## 使用方法
+## 请求示例
+
+### Gemini
 
 ```bash
-# 例子：以 Claude 格式请求 Gemini 后端
-curl -X POST https://claude-worker-proxy.xxxx.workers.dev/gemini/v1/messages \
+curl -X POST http://localhost:8080/gemini/v1/messages \
   -H "x-api-key: YOUR_GEMINI_API_KEY" \
   -H "Content-Type: application/json" \
   -d '{
-    "model": "gemini-2.5-flash",
+    "model": "YOUR_GEMINI_MODEL",
+    "max_tokens": 1024,
     "messages": [
-      {"role": "user", "content": "Hello"}
+      { "role": "user", "content": "你好，简单介绍一下你自己。" }
     ]
   }'
 ```
 
-### 参数说明
-
-- URL 格式：`{worker_url}/{type}/v1/messages`
-- `type`: 目标厂商类型，目前支持 `gemini`, `openai`
-- 目标厂商 API 基础地址已内置：`gemini` 使用 `https://generativelanguage.googleapis.com/v1beta`，`openai` 使用 `https://api.openai.com/v1`
-- `x-api-key`: 目标厂商的 API Key
-
-### 在 Claude Code 中使用
+### OpenAI
 
 ```bash
-# 编辑 ~/.claude/settings.json
+curl -X POST http://localhost:8080/openai/v1/messages \
+  -H "x-api-key: YOUR_OPENAI_API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "model": "YOUR_OPENAI_MODEL",
+    "max_tokens": 1024,
+    "messages": [
+      { "role": "user", "content": "你好，简单介绍一下你自己。" }
+    ]
+  }'
+```
+
+流式响应只需要在请求体中加入：
+
+```json
+{
+  "stream": true
+}
+```
+
+## 鉴权
+
+代理会从以下任一请求头读取目标厂商 API Key：
+
+- `x-api-key: YOUR_PROVIDER_API_KEY`
+- `Authorization: YOUR_PROVIDER_API_KEY`
+
+读取后，代理会自动转换为目标厂商需要的鉴权方式：
+
+- Gemini：`x-goog-api-key`
+- OpenAI：`Authorization: Bearer ...`
+
+## 路径和错误
+
+有效路径必须是：
+
+```text
+/{type}/v1/messages
+```
+
+其中 `type` 目前支持：
+
+- `gemini`
+- `openai`
+
+常见错误：
+
+- 非 `POST` 请求会返回 `405 Method not allowed`
+- 路径不是 `/{type}/v1/messages` 会返回 `400` 或 `404`
+- 缺少 `x-api-key` 或 `Authorization` 会返回 `401`
+- 不支持的 `type` 会返回 `400 Unsupported type`
+
+## 在 Claude Code 中使用
+
+把 Worker 地址作为 Anthropic 兼容入口即可。下面以 Gemini 为例：
+
+```json
 {
   "env": {
-    "ANTHROPIC_BASE_URL": "https://claude-worker-proxy.xxxx.workers.dev/gemini",
-    "ANTHROPIC_API_KEY": "YOUR_KEY",
-    "ANTHROPIC_MODEL": "gemini-2.5-pro", # 大模型，按需修改
-    "ANTHROPIC_SMALL_FAST_MODEL": "gemini-2.5-flash", # 小模型。也许你并不需要 ccr 那么强大的 route
+    "ANTHROPIC_BASE_URL": "https://YOUR_WORKER.YOUR_SUBDOMAIN.workers.dev/gemini",
+    "ANTHROPIC_API_KEY": "YOUR_GEMINI_API_KEY",
+    "ANTHROPIC_MODEL": "YOUR_GEMINI_MODEL",
+    "ANTHROPIC_SMALL_FAST_MODEL": "YOUR_FAST_MODEL",
     "API_TIMEOUT_MS": "600000"
   }
 }
-
-claude
 ```
 
----
+使用 OpenAI 后端时，把 `ANTHROPIC_BASE_URL` 改为：
 
-<table>
-  <tr>
-    <td align="center">
-      <img src="https://github.com/glidea/zenfeed/blob/main/docs/images/wechat.png?raw=true" alt="Wechat QR Code" width="300">
-      <br>
-      <strong>AI 学习交流社群</strong>
-    </td>
-    <td align="center">
-      <img src="https://github.com/glidea/banana-prompt-quicker/blob/main/images/glidea.png?raw=true" width="250">
-      <br>
-      <strong><a href="https://glidea.zenfeed.xyz/">我的其它项目</a></strong>
-    </td>
-  </tr>
-  <tr>
-    <td align="center" colspan="2">
-      <img src="https://github.com/glidea/banana-prompt-quicker/blob/main/images/readnote.png?raw=true" width="400">
-      <br>
-      <strong><a href="https://www.xiaohongshu.com/user/profile/5f7dc54d0000000001004afb">📕 小红书账号 - 持续分享 AI 原创</a></strong>
-    </td>
-  </tr>
-</table>
+```text
+https://YOUR_WORKER.YOUR_SUBDOMAIN.workers.dev/openai
+```
+
+同时把 `ANTHROPIC_API_KEY` 和模型名换成对应 OpenAI 配置。
+
+## 已知限制
+
+- 仅实现 Claude Messages API 的常用字段转换，不是完整 Anthropic API 兼容层
+- 不支持 Anthropic `file` 类型图片来源
+- Gemini 图片 URL 会由 Worker 先拉取并转为 `inlineData`，因此图片地址必须是可公开访问的 `http` 或 `https` URL
+- 目标厂商返回非成功状态时，代理会直接返回原始响应
+
