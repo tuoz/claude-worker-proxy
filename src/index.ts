@@ -2,6 +2,11 @@ import * as provider from './provider'
 import * as gemini from './gemini'
 import * as openai from './openai'
 
+const PROVIDER_BASE_URLS = {
+    gemini: 'https://generativelanguage.googleapis.com/v1beta',
+    openai: 'https://api.openai.com/v1'
+} as const
+
 export default {
     async fetch(request: Request, env: Env, ctx: ExecutionContext): Promise<Response> {
         try {
@@ -18,7 +23,7 @@ async function handle(request: Request): Promise<Response> {
         return new Response('Method not allowed', { status: 405 })
     }
 
-    const { typeParam, baseUrl, err: pathErr } = parsePath(new URL(request.url))
+    const { typeParam, err: pathErr } = parsePath(new URL(request.url))
     if (pathErr) {
         return pathErr
     }
@@ -28,17 +33,20 @@ async function handle(request: Request): Promise<Response> {
         return apiKeyErr
     }
 
-    if (!apiKey || !typeParam || !baseUrl) {
+    if (!apiKey || !typeParam) {
         return new Response('Internal server error, missing params', { status: 500 })
     }
 
     let provider: provider.Provider
+    let baseUrl: string
     switch (typeParam) {
         case 'gemini':
             provider = new gemini.impl()
+            baseUrl = PROVIDER_BASE_URLS.gemini
             break
         case 'openai':
             provider = new openai.impl()
+            baseUrl = PROVIDER_BASE_URLS.openai
             break
         default:
             return new Response('Unsupported type', { status: 400 })
@@ -53,32 +61,25 @@ async function handle(request: Request): Promise<Response> {
     return await provider.convertToClaudeResponse(providerResponse)
 }
 
-function parsePath(url: URL): { typeParam?: string; baseUrl?: string; err?: Response } {
+function parsePath(url: URL): { typeParam?: string; err?: Response } {
     const pathParts = url.pathname.split('/').filter(part => part !== '')
-    if (pathParts.length < 3) {
+    if (pathParts.length !== 3) {
         return {
-            err: new Response('Invalid path format. Expected: /{type}/{provider_url}/v1/messages', { status: 400 })
+            err: new Response('Invalid path format. Expected: /{type}/v1/messages', { status: 400 })
         }
     }
+
     const lastTwoParts = pathParts.slice(-2)
     if (lastTwoParts[0] !== 'v1' || lastTwoParts[1] !== 'messages') {
         return { err: new Response('Path must end with /v1/messages', { status: 404 }) }
     }
 
     const typeParam = pathParts[0]
-    const providerUrlParts = pathParts.slice(1, -2)
-
-    // [..., 'https:', ...] ==> [..., 'https:/', ...]
-    if (pathParts[1] && pathParts[1].startsWith('http')) {
-        pathParts[1] = pathParts[1] + '/'
+    if (!typeParam) {
+        return { err: new Response('Missing type in path', { status: 400 }) }
     }
 
-    const baseUrl = providerUrlParts.join('/')
-    if (!typeParam || !baseUrl) {
-        return { err: new Response('Missing type or provider_url in path', { status: 400 }) }
-    }
-
-    return { typeParam, baseUrl }
+    return { typeParam }
 }
 
 function getApiKey(headers: Headers): { apiKey?: string; mutatedHeaders?: Headers; err?: Response } {
