@@ -23,7 +23,7 @@ export class impl implements provider.Provider {
 
     async convertToClaudeResponse(geminiResponse: Response): Promise<Response> {
         if (!geminiResponse.ok) {
-            return geminiResponse
+            return this.convertErrorResponse(geminiResponse)
         }
 
         const contentType = geminiResponse.headers.get('content-type') || ''
@@ -34,6 +34,20 @@ export class impl implements provider.Provider {
         } else {
             return this.convertNormalResponse(geminiResponse)
         }
+    }
+
+    private async convertErrorResponse(geminiResponse: Response): Promise<Response> {
+        let message = `Gemini API error: ${geminiResponse.status} ${geminiResponse.statusText}`
+        try {
+            const body = (await geminiResponse.json()) as { error?: { message?: string } }
+            if (body?.error?.message) message = body.error.message
+        } catch {
+            // non-JSON body: keep status-based message
+        }
+        return new Response(
+            JSON.stringify({ type: 'error', error: { type: 'api_error', message } }),
+            { status: geminiResponse.status, headers: { 'Content-Type': 'application/json' } }
+        )
     }
 
     private async convertToGeminiRequestBody(claudeRequest: types.ClaudeRequest): Promise<types.GeminiRequest> {
@@ -188,33 +202,38 @@ export class impl implements provider.Provider {
                             }
                         })
                         break
-                    case 'tool_result':
+                    case 'tool_result': {
                         const functionName = toolUseMap.get(content.tool_use_id)
-                        if (functionName) {
-                            toolResultParts.push({
-                                functionResponse: {
-                                    id: content.tool_use_id,
-                                    name: functionName,
-                                    response: { content: content.content }
-                                }
-                            })
+                        if (!functionName) {
+                            console.warn(`tool_result references unknown tool_use_id: ${content.tool_use_id} — dropping`)
+                            break
                         }
+                        const resultContent = Array.isArray(content.content)
+                            ? content.content.map(block => block.text).join('\n')
+                            : (content.content ?? '')
+                        toolResultParts.push({
+                            functionResponse: {
+                                id: content.tool_use_id,
+                                name: functionName,
+                                response: { content: resultContent }
+                            }
+                        })
                         break
+                    }
                 }
             }
 
-            if (modelParts.length > 0 || userParts.length > 0) {
-                contents.push({
-                    parts: message.role === 'assistant' ? modelParts : userParts,
-                    role: message.role === 'assistant' ? 'model' : 'user'
-                })
-            }
-
-            if (toolResultParts.length > 0) {
-                contents.push({
-                    parts: toolResultParts,
-                    role: 'user'
-                })
+            if (message.role === 'assistant') {
+                if (modelParts.length > 0) {
+                    contents.push({ parts: modelParts, role: 'model' })
+                }
+            } else {
+                // Merge text/image parts and tool result parts into a single user entry
+                // to avoid consecutive same-role messages that Gemini rejects
+                const combinedUserParts = [...userParts, ...toolResultParts]
+                if (combinedUserParts.length > 0) {
+                    contents.push({ parts: combinedUserParts, role: 'user' })
+                }
             }
         }
 
@@ -281,11 +300,16 @@ export class impl implements provider.Provider {
             content: []
         }
 
+        if (geminiResponse.url) {
+            const modelMatch = new URL(geminiResponse.url).pathname.match(/\/models\/([^/:]+)/)
+            if (modelMatch) claudeResponse.model = modelMatch[1]
+        }
+
         if (geminiData.candidates && geminiData.candidates.length > 0) {
             const candidate = geminiData.candidates[0]
             let hasToolUse = false
 
-            for (const part of candidate.content.parts) {
+            for (const part of candidate.content?.parts ?? []) {
                 if ('text' in part && !part.thought) {
                     claudeResponse.content.push({
                         type: 'text',
@@ -309,6 +333,8 @@ export class impl implements provider.Provider {
             } else {
                 claudeResponse.stop_reason = 'end_turn'
             }
+        } else {
+            claudeResponse.stop_reason = 'end_turn'
         }
 
         if (geminiData.usageMetadata) {
@@ -327,7 +353,11 @@ export class impl implements provider.Provider {
     }
 
     private async convertStreamResponse(geminiResponse: Response): Promise<Response> {
-        return utils.processProviderStream(geminiResponse, (jsonStr, state) => {
+        const modelMatch = geminiResponse.url
+            ? new URL(geminiResponse.url).pathname.match(/\/models\/([^/:]+)/)
+            : null
+        const model = modelMatch ? modelMatch[1] : undefined
+        return utils.processProviderStream(geminiResponse, model, (jsonStr, state) => {
             const geminiData = JSON.parse(jsonStr) as types.GeminiResponse
             const events: string[] = []
             let nextState: utils.ProviderStreamState = { ...state, events }
@@ -379,7 +409,15 @@ export class impl implements provider.Provider {
             case 'MAX_TOKENS':
                 return 'max_tokens'
             case 'STOP':
+            case 'TOOL_CODE': // Gemini code execution — distinct from function calling, no Claude equivalent
                 return 'end_turn'
+            // No direct Claude equivalent for safety/policy filtering;
+            // map to 'end_turn' — content array will be empty (see Fix 1)
+            case 'SAFETY':
+            case 'RECITATION':
+            case 'PROHIBITED_CONTENT':
+            case 'SPII':
+            case 'OTHER':
             default:
                 return 'end_turn'
         }

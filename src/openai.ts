@@ -299,7 +299,7 @@ export class impl implements provider.Provider {
     }
 
     private async convertStreamResponse(openaiResponse: Response): Promise<Response> {
-        return utils.processProviderStream(openaiResponse, (jsonStr, state) => {
+        return utils.processProviderStream(openaiResponse, undefined, (jsonStr, state) => {
             const openaiData = JSON.parse(jsonStr) as types.OpenAIStreamResponse
             const events: string[] = []
             let nextState: utils.ProviderStreamState = {

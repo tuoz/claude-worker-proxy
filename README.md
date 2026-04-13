@@ -11,18 +11,18 @@
 - 支持 `system`、`messages`、`temperature`、`max_tokens`、`stop_sequences`、`top_p`
 - 支持工具调用：`tools`、`tool_choice`、`tool_use`、`tool_result`
 - 支持用户消息里的图片输入
-  - Gemini：支持 `base64` 和可访问的 `http/https` 图片 URL，Worker 会先抓取并转为 `inlineData`
-  - OpenAI：支持 `base64` 和图片 URL，其中 URL 直接透传给上游
+    - Gemini：支持 `base64` 和可访问的 `http/https` 图片 URL，Worker 会先抓取并转为 `inlineData`
+    - OpenAI：支持 `base64` 和图片 URL，其中 URL 直接透传给上游
 - 使用请求头里的原始 API key 访问目标厂商，不在 Worker 中保存模型 API Key
 
 ## 工作方式
 
 请求路径决定目标厂商：
 
-| 路径 | 目标接口 |
-| --- | --- |
+| 路径                  | 目标接口                                                                                     |
+| --------------------- | -------------------------------------------------------------------------------------------- |
 | `/gemini/v1/messages` | `https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent` 或流式接口 |
-| `/openai/v1/messages` | `https://api.openai.com/v1/chat/completions` |
+| `/openai/v1/messages` | `https://api.openai.com/v1/chat/completions`                                                 |
 
 请求体使用 Claude Messages API 的常见字段。Worker 会根据路径转换请求体、鉴权头和响应格式。
 
@@ -86,7 +86,7 @@ curl -X POST http://localhost:8080/openai/v1/messages \
 
 ```json
 {
-  "stream": true
+    "stream": true
 }
 ```
 
@@ -128,13 +128,13 @@ curl -X POST http://localhost:8080/openai/v1/messages \
 
 ```json
 {
-  "env": {
-    "ANTHROPIC_BASE_URL": "https://YOUR_WORKER.YOUR_SUBDOMAIN.workers.dev/gemini",
-    "ANTHROPIC_API_KEY": "YOUR_GEMINI_API_KEY",
-    "ANTHROPIC_MODEL": "YOUR_GEMINI_MODEL",
-    "ANTHROPIC_SMALL_FAST_MODEL": "YOUR_FAST_MODEL",
-    "API_TIMEOUT_MS": "600000"
-  }
+    "env": {
+        "ANTHROPIC_BASE_URL": "https://YOUR_WORKER.YOUR_SUBDOMAIN.workers.dev/gemini",
+        "ANTHROPIC_API_KEY": "YOUR_GEMINI_API_KEY",
+        "ANTHROPIC_MODEL": "YOUR_GEMINI_MODEL",
+        "ANTHROPIC_SMALL_FAST_MODEL": "YOUR_FAST_MODEL",
+        "API_TIMEOUT_MS": "600000"
+    }
 }
 ```
 
@@ -151,5 +151,4 @@ https://YOUR_WORKER.YOUR_SUBDOMAIN.workers.dev/openai
 - 仅实现 Claude Messages API 的常用字段转换，不是完整 Anthropic API 兼容层
 - 不支持 Anthropic `file` 类型图片来源
 - Gemini 图片 URL 会由 Worker 先拉取并转为 `inlineData`，因此图片地址必须是可公开访问的 `http` 或 `https` URL
-- 目标厂商返回非成功状态时，代理会直接返回原始响应
-
+- Gemini 返回非成功状态时，错误响应会被转换为 Claude 错误格式（`{"type":"error","error":{...}}`）；OpenAI 错误响应直接透传

@@ -1,19 +1,23 @@
 export function generateId(): string {
-    return Math.random().toString(36).substring(2)
+    return crypto.randomUUID()
 }
 
-export function sendMessageStart(controller: ReadableStreamDefaultController): void {
+export function sendMessageStart(controller: ReadableStreamDefaultController, model?: string): void {
+    const message: Record<string, unknown> = {
+        id: generateId(),
+        type: 'message',
+        role: 'assistant',
+        content: [],
+        stop_reason: null,
+        stop_sequence: null,
+        usage: normalizeUsage()
+    }
+    if (model !== undefined) {
+        message.model = model
+    }
     const event = `event: message_start\ndata: ${JSON.stringify({
         type: 'message_start',
-        message: {
-            id: generateId(),
-            type: 'message',
-            role: 'assistant',
-            content: [],
-            stop_reason: null,
-            stop_sequence: null,
-            usage: normalizeUsage()
-        }
+        message
     })}\n\n`
     controller.enqueue(new TextEncoder().encode(event))
 }
@@ -166,6 +170,7 @@ export function arrayBufferToBase64(buffer: ArrayBuffer): string {
 
 export async function processProviderStream(
     providerResponse: Response,
+    model: string | undefined,
     processLine: (jsonStr: string, state: ProviderStreamState) => ProviderStreamState | null
 ): Promise<Response> {
     const stream = new ReadableStream({
@@ -182,7 +187,7 @@ export async function processProviderStream(
                 nextBlockIndex: 0
             }
 
-            sendMessageStart(controller)
+            sendMessageStart(controller, model)
 
             try {
                 while (true) {
@@ -295,8 +300,12 @@ export function cleanGeminiFunctionSchema(schema: any): any {
         }
 
         if (key === 'const') {
-            if (typeof value === 'string' && !Array.isArray(cleaned.enum)) {
-                cleaned.type = cleaned.type || 'string'
+            if (!Array.isArray(cleaned.enum)) {
+                if (cleaned.type === undefined) {
+                    if (typeof value === 'string') cleaned.type = 'string'
+                    else if (typeof value === 'number') cleaned.type = Number.isInteger(value) ? 'integer' : 'number'
+                    else if (typeof value === 'boolean') cleaned.type = 'boolean'
+                }
                 cleaned.enum = [value]
             }
             continue
@@ -307,7 +316,7 @@ export function cleanGeminiFunctionSchema(schema: any): any {
             continue
         }
 
-        if (key === 'format' && schema.type === 'string') {
+        if (key === 'format') {
             continue
         }
 
