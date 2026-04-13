@@ -44,10 +44,10 @@ export class impl implements provider.Provider {
         } catch {
             // non-JSON body: keep status-based message
         }
-        return new Response(
-            JSON.stringify({ type: 'error', error: { type: 'api_error', message } }),
-            { status: geminiResponse.status, headers: { 'Content-Type': 'application/json' } }
-        )
+        return new Response(JSON.stringify({ type: 'error', error: { type: 'api_error', message } }), {
+            status: geminiResponse.status,
+            headers: { 'Content-Type': 'application/json' }
+        })
     }
 
     private async convertToGeminiRequestBody(claudeRequest: types.ClaudeRequest): Promise<types.GeminiRequest> {
@@ -205,7 +205,9 @@ export class impl implements provider.Provider {
                     case 'tool_result': {
                         const functionName = toolUseMap.get(content.tool_use_id)
                         if (!functionName) {
-                            console.warn(`tool_result references unknown tool_use_id: ${content.tool_use_id} — dropping`)
+                            console.warn(
+                                `tool_result references unknown tool_use_id: ${content.tool_use_id} — dropping`
+                            )
                             break
                         }
                         const resultContent = Array.isArray(content.content)
@@ -353,9 +355,7 @@ export class impl implements provider.Provider {
     }
 
     private async convertStreamResponse(geminiResponse: Response): Promise<Response> {
-        const modelMatch = geminiResponse.url
-            ? new URL(geminiResponse.url).pathname.match(/\/models\/([^/:]+)/)
-            : null
+        const modelMatch = geminiResponse.url ? new URL(geminiResponse.url).pathname.match(/\/models\/([^/:]+)/) : null
         const model = modelMatch ? modelMatch[1] : undefined
         return utils.processProviderStream(geminiResponse, model, (jsonStr, state) => {
             const geminiData = JSON.parse(jsonStr) as types.GeminiResponse

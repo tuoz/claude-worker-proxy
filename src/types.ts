@@ -26,7 +26,12 @@ export type ClaudeContentBlock =
               | { type: 'file'; file_id: string }
       }
     | { type: 'tool_use'; id: string; name: string; input: any }
-    | { type: 'tool_result'; tool_use_id: string; content?: string | Array<{ type: 'text'; text: string }>; is_error?: boolean }
+    | {
+          type: 'tool_result'
+          tool_use_id: string
+          content?: string | Array<{ type: 'text'; text: string }>
+          is_error?: boolean
+      }
 
 export type ClaudeContent = string | ClaudeContentBlock[]
 
