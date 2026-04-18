@@ -156,7 +156,9 @@ export class impl implements provider.Provider {
                         toolResults.push({
                             tool_call_id: content.tool_use_id,
                             content:
-                                typeof content.content === 'string' ? content.content : JSON.stringify(content.content)
+                                typeof content.content === 'string'
+                                    ? content.content
+                                    : (content.content?.map(c => c.text).join('\n') ?? '')
                         })
                         break
                 }
@@ -223,6 +225,7 @@ export class impl implements provider.Provider {
             id: utils.generateId(),
             type: 'message',
             role: 'assistant',
+            model: openaiData.model,
             content: []
         }
 
@@ -300,12 +303,22 @@ export class impl implements provider.Provider {
 
     private async convertStreamResponse(openaiResponse: Response): Promise<Response> {
         return utils.processProviderStream(openaiResponse, undefined, (jsonStr, state) => {
-            const openaiData = JSON.parse(jsonStr) as types.OpenAIStreamResponse
+            let openaiData: types.OpenAIStreamResponse
+            try {
+                openaiData = JSON.parse(jsonStr) as types.OpenAIStreamResponse
+            } catch {
+                console.warn('Failed to parse OpenAI stream JSON:', jsonStr)
+                return state
+            }
             const events: string[] = []
             let nextState: utils.ProviderStreamState = {
                 ...state,
                 events,
                 toolCalls: state.toolCalls || {}
+            }
+
+            if (openaiData.model) {
+                nextState.model = openaiData.model
             }
 
             if (openaiData.usage) {

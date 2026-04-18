@@ -5,7 +5,7 @@ import * as utils from './utils'
 
 const PROVIDER_BASE_URLS = {
     gemini: 'https://generativelanguage.googleapis.com/v1beta',
-    openai: 'https://api.openai.com/v1'
+    openai: 'https://opencode.ai/zen/go/v1'
 } as const
 
 export default {
@@ -94,6 +94,7 @@ function getApiKey(headers: Headers): { apiKey?: string; mutatedHeaders?: Header
     } else {
         apiKey = mutatedHeaders.get('authorization')
         if (apiKey) {
+            apiKey = apiKey.replace(/^Bearer\s+/i, '')
             mutatedHeaders.delete('authorization')
         }
     }

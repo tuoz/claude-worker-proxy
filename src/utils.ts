@@ -183,11 +183,18 @@ export async function processProviderStream(
 
             const decoder = new TextDecoder()
             let buffer = ''
+            let messageStartSent = false
             let state: ProviderStreamState = {
-                nextBlockIndex: 0
+                nextBlockIndex: 0,
+                model
             }
 
-            sendMessageStart(controller, model)
+            const ensureMessageStart = () => {
+                if (!messageStartSent) {
+                    sendMessageStart(controller, state.model)
+                    messageStartSent = true
+                }
+            }
 
             try {
                 while (true) {
@@ -200,12 +207,13 @@ export async function processProviderStream(
                     buffer = lines.pop() || ''
 
                     for (const line of lines) {
-                        state = processStreamLine(line, state, processLine, controller)
+                        state = processStreamLine(line, state, processLine, controller, ensureMessageStart)
                     }
                 }
             } finally {
+                ensureMessageStart()
                 if (buffer.trim() && buffer.startsWith('data: ')) {
-                    state = processStreamLine(buffer, state, processLine, controller)
+                    state = processStreamLine(buffer, state, processLine, controller, ensureMessageStart)
                 }
                 if (state.openTextBlockIndex !== undefined) {
                     controller.enqueue(new TextEncoder().encode(stopContentBlock(state.openTextBlockIndex)))
@@ -238,13 +246,15 @@ export interface ProviderStreamState {
     }
     toolCalls?: Record<number, { id?: string; name?: string; arguments: string }>
     events?: string[]
+    model?: string
 }
 
 function processStreamLine(
     line: string,
     state: ProviderStreamState,
     processLine: (jsonStr: string, state: ProviderStreamState) => ProviderStreamState | null,
-    controller: ReadableStreamDefaultController
+    controller: ReadableStreamDefaultController,
+    ensureMessageStart: () => void
 ): ProviderStreamState {
     if (!line.trim() || !line.startsWith('data: ')) return state
 
@@ -253,6 +263,10 @@ function processStreamLine(
 
     const result = processLine(jsonStr, state)
     if (!result) return state
+
+    if (result.events && result.events.length > 0) {
+        ensureMessageStart()
+    }
 
     for (const event of result.events || []) {
         controller.enqueue(new TextEncoder().encode(event))
