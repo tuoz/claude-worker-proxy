@@ -24,18 +24,18 @@ npm run deploycf
 {
     "env": {
         "ANTHROPIC_BASE_URL": "https://your-worker.workers.dev/openai",
-        "ANTHROPIC_API_KEY": "Your OpenCode Go API Key",
+        "ANTHROPIC_AUTH_TOKEN": "Your OpenCode Go API Key",
         "ANTHROPIC_MODEL": "glm-5.1"
     }
 }
 ```
 
-或者：（Minimax 的模型使用的 Claude 兼容的接口）
+或者: (Minimax 的模型使用的 Claude 兼容的接口)
 ```json
 {
     "env": {
         "ANTHROPIC_BASE_URL": "https://your-worker.workers.dev/claude",
-        "ANTHROPIC_API_KEY": "Your OpenCode Go API Key",
+        "ANTHROPIC_AUTH_TOKEN": "Your OpenCode Go API Key",
         "ANTHROPIC_MODEL": "minimax-m2.7"
     }
 }
