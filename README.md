@@ -31,6 +31,7 @@ npm run deploycf
 ```
 
 或者: (Minimax 的模型使用的 Claude 兼容的接口)
+
 ```json
 {
     "env": {
@@ -45,12 +46,12 @@ npm run deploycf
 
 ## 支持模型
 
-| 模型 | Model ID |
-|------|----------|
-| Kimi K2.5 | `kimi-k2.5` |
-| GLM-5.1 | `glm-5.1` |
-| GLM-5 | `glm-5` |
-| MiMo-V2-Pro | `mimo-v2-pro` |
+| 模型         | Model ID       |
+| ------------ | -------------- |
+| Kimi K2.5    | `kimi-k2.5`    |
+| GLM-5.1      | `glm-5.1`      |
+| GLM-5        | `glm-5`        |
+| MiMo-V2-Pro  | `mimo-v2-pro`  |
 | MiMo-V2-Omni | `mimo-v2-omni` |
 | MiniMax M2.7 | `minimax-m2.7` |
 | MiniMax M2.5 | `minimax-m2.5` |

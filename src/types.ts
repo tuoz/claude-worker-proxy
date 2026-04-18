@@ -32,12 +32,15 @@ export type ClaudeContentBlock =
           content?: string | Array<{ type: 'text'; text: string }>
           is_error?: boolean
       }
+    | { type: 'thinking'; thinking: string; signature?: string }
+    | { type: 'redacted_thinking'; data: string }
 
 export type ClaudeContent = string | ClaudeContentBlock[]
 
 export interface ClaudeMessage {
     role: 'user' | 'assistant'
-    content: ClaudeContent
+    content: ClaudeContent | null
+    tool_calls?: OpenAIToolCall[]
 }
 
 export interface ClaudeRequest {
@@ -51,6 +54,7 @@ export interface ClaudeRequest {
     stop_sequences?: string[]
     top_p?: number
     tool_choice?: { type: 'auto' } | { type: 'any' } | { type: 'none' } | { type: 'tool'; name: string }
+    thinking?: { type: 'enabled'; budget_tokens: number } | { type: 'adaptive' } | { type: 'disabled' }
 }
 
 export interface ClaudeResponse {
@@ -155,6 +159,7 @@ export interface OpenAIMessage {
     content?: string | null | OpenAIContentPart[]
     tool_calls?: OpenAIToolCall[]
     tool_call_id?: string
+    reasoning_content?: string | null
 }
 
 export type OpenAIContentPart = { type: 'text'; text: string } | { type: 'image_url'; image_url: { url: string } }
@@ -191,6 +196,7 @@ export interface OpenAIRequest {
     stream_options?: {
         include_usage?: boolean
     }
+    reasoning_effort?: string
 }
 
 export interface OpenAIChoice {

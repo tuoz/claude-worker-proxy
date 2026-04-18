@@ -9,7 +9,7 @@ export class impl implements provider.Provider {
 
         const finalUrl = utils.buildUrl(baseUrl, 'chat/completions')
 
-        const headers = new Headers(request.headers)
+        const headers = new Headers()
         headers.set('Authorization', `Bearer ${apiKey}`)
         headers.set('Content-Type', 'application/json')
 
@@ -36,9 +36,11 @@ export class impl implements provider.Provider {
     }
 
     private convertToOpenAIRequestBody(claudeRequest: types.ClaudeRequest): types.OpenAIRequest {
+        const isThinkingEnabled = claudeRequest.thinking && claudeRequest.thinking.type !== 'disabled'
+
         const openaiRequest: types.OpenAIRequest = {
             model: claudeRequest.model,
-            messages: this.convertMessages(claudeRequest.messages, claudeRequest.system),
+            messages: this.convertMessages(claudeRequest.messages, claudeRequest.system, isThinkingEnabled),
             stream: claudeRequest.stream
         }
 
@@ -49,14 +51,26 @@ export class impl implements provider.Provider {
         }
 
         if (claudeRequest.tools && claudeRequest.tools.length > 0) {
-            openaiRequest.tools = claudeRequest.tools.map(tool => ({
-                type: 'function',
-                function: {
-                    name: tool.name,
-                    description: tool.description,
-                    parameters: utils.cleanOpenAIFunctionSchema(tool.input_schema)
+            openaiRequest.tools = claudeRequest.tools.map(tool => {
+                if ('function' in tool && tool.function) {
+                    return {
+                        type: 'function' as const,
+                        function: {
+                            name: tool.function.name,
+                            description: tool.function.description,
+                            parameters: utils.cleanOpenAIFunctionSchema(tool.function.parameters)
+                        }
+                    }
                 }
-            }))
+                return {
+                    type: 'function' as const,
+                    function: {
+                        name: tool.name,
+                        description: tool.description,
+                        parameters: utils.cleanOpenAIFunctionSchema(tool.input_schema)
+                    }
+                }
+            })
         }
 
         const toolChoice = this.convertToolChoice(claudeRequest.tool_choice)
@@ -78,6 +92,10 @@ export class impl implements provider.Provider {
 
         if (claudeRequest.top_p !== undefined) {
             openaiRequest.top_p = claudeRequest.top_p
+        }
+
+        if (isThinkingEnabled) {
+            openaiRequest.reasoning_effort = 'medium'
         }
 
         return openaiRequest
@@ -106,7 +124,8 @@ export class impl implements provider.Provider {
 
     private convertMessages(
         claudeMessages: types.ClaudeMessage[],
-        system: types.ClaudeRequest['system']
+        system: types.ClaudeRequest['system'],
+        isThinkingEnabled: boolean
     ): types.OpenAIMessage[] {
         const openaiMessages: types.OpenAIMessage[] = []
 
@@ -119,6 +138,27 @@ export class impl implements provider.Provider {
         }
 
         for (const message of claudeMessages) {
+            if (message.role === 'assistant' && message.tool_calls && (message.content === null || message.content === undefined)) {
+                const openaiMessage: types.OpenAIMessage = {
+                    role: 'assistant',
+                    tool_calls: message.tool_calls.map(tc => ({
+                        id: tc.id,
+                        type: 'function' as const,
+                        function: {
+                            name: tc.function.name,
+                            arguments: typeof tc.function.arguments === 'string'
+                                ? tc.function.arguments
+                                : JSON.stringify(tc.function.arguments)
+                        }
+                    }))
+                }
+                if (isThinkingEnabled) {
+                    openaiMessage.reasoning_content = ' '
+                }
+                openaiMessages.push(openaiMessage)
+                continue
+            }
+
             if (typeof message.content === 'string') {
                 openaiMessages.push({
                     role: message.role === 'assistant' ? 'assistant' : 'user',
@@ -130,6 +170,7 @@ export class impl implements provider.Provider {
             const contentParts: types.OpenAIContentPart[] = []
             const toolCalls: types.OpenAIToolCall[] = []
             const toolResults: Array<{ tool_call_id: string; content: string }> = []
+            let reasoningContent: string | undefined
 
             for (const content of message.content) {
                 switch (content.type) {
@@ -141,6 +182,13 @@ export class impl implements provider.Provider {
                             utils.badRequest('Image content is only supported in user messages')
                         }
                         contentParts.push(this.convertImagePart(content))
+                        break
+                    case 'thinking':
+                        if (message.role === 'assistant') {
+                            reasoningContent = content.thinking
+                        }
+                        break
+                    case 'redacted_thinking':
                         break
                     case 'tool_use':
                         toolCalls.push({
@@ -180,7 +228,17 @@ export class impl implements provider.Provider {
                     openaiMessage.tool_calls = toolCalls
                 }
 
+                if (message.role === 'assistant' && isThinkingEnabled) {
+                    openaiMessage.reasoning_content = reasoningContent ?? ' '
+                }
+
                 openaiMessages.push(openaiMessage)
+            } else if (message.role === 'assistant' && isThinkingEnabled) {
+                openaiMessages.push({
+                    role: 'assistant',
+                    content: null,
+                    reasoning_content: reasoningContent ?? ' '
+                })
             }
 
             for (const toolResult of toolResults) {
