@@ -1,11 +1,13 @@
 import * as provider from './provider'
 import * as gemini from './gemini'
 import * as openai from './openai'
+import * as claude from './claude'
 import * as utils from './utils'
 
 const PROVIDER_BASE_URLS = {
     gemini: 'https://generativelanguage.googleapis.com/v1beta',
-    openai: 'https://opencode.ai/zen/go/v1'
+    openai: 'https://opencode.ai/zen/go/v1',
+    claude: 'https://opencode.ai/zen/go/v1'
 } as const
 
 export default {
@@ -51,6 +53,10 @@ async function handle(request: Request): Promise<Response> {
         case 'openai':
             provider = new openai.impl()
             baseUrl = PROVIDER_BASE_URLS.openai
+            break
+        case 'claude':
+            provider = new claude.impl()
+            baseUrl = PROVIDER_BASE_URLS.claude
             break
         default:
             return new Response('Unsupported type', { status: 400 })
