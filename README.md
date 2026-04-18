@@ -36,7 +36,7 @@ npm run deploycf
     "env": {
         "ANTHROPIC_BASE_URL": "https://your-worker.workers.dev/claude",
         "ANTHROPIC_API_KEY": "Your OpenCode Go API Key",
-        "ANTHROPIC_MODEL": "minimax-m2.5"
+        "ANTHROPIC_MODEL": "minimax-m2.7"
     }
 }
 ```
