@@ -36,7 +36,7 @@ export class impl implements provider.Provider {
     }
 
     private convertToOpenAIRequestBody(claudeRequest: types.ClaudeRequest): types.OpenAIRequest {
-        const isThinkingEnabled = claudeRequest.thinking && claudeRequest.thinking.type !== 'disabled'
+        const isThinkingEnabled = !!(claudeRequest.thinking && claudeRequest.thinking.type !== 'disabled')
 
         const openaiRequest: types.OpenAIRequest = {
             model: claudeRequest.model,
@@ -51,26 +51,14 @@ export class impl implements provider.Provider {
         }
 
         if (claudeRequest.tools && claudeRequest.tools.length > 0) {
-            openaiRequest.tools = claudeRequest.tools.map(tool => {
-                if ('function' in tool && tool.function) {
-                    return {
-                        type: 'function' as const,
-                        function: {
-                            name: tool.function.name,
-                            description: tool.function.description,
-                            parameters: utils.cleanOpenAIFunctionSchema(tool.function.parameters)
-                        }
-                    }
+            openaiRequest.tools = claudeRequest.tools.map(tool => ({
+                type: 'function' as const,
+                function: {
+                    name: tool.name,
+                    description: tool.description,
+                    parameters: utils.cleanOpenAIFunctionSchema(tool.input_schema)
                 }
-                return {
-                    type: 'function' as const,
-                    function: {
-                        name: tool.name,
-                        description: tool.description,
-                        parameters: utils.cleanOpenAIFunctionSchema(tool.input_schema)
-                    }
-                }
-            })
+            }))
         }
 
         const toolChoice = this.convertToolChoice(claudeRequest.tool_choice)
@@ -138,7 +126,11 @@ export class impl implements provider.Provider {
         }
 
         for (const message of claudeMessages) {
-            if (message.role === 'assistant' && message.tool_calls && (message.content === null || message.content === undefined)) {
+            if (
+                message.role === 'assistant' &&
+                message.tool_calls &&
+                (message.content === null || message.content === undefined)
+            ) {
                 const openaiMessage: types.OpenAIMessage = {
                     role: 'assistant',
                     tool_calls: message.tool_calls.map(tc => ({
@@ -146,9 +138,10 @@ export class impl implements provider.Provider {
                         type: 'function' as const,
                         function: {
                             name: tc.function.name,
-                            arguments: typeof tc.function.arguments === 'string'
-                                ? tc.function.arguments
-                                : JSON.stringify(tc.function.arguments)
+                            arguments:
+                                typeof tc.function.arguments === 'string'
+                                    ? tc.function.arguments
+                                    : JSON.stringify(tc.function.arguments)
                         }
                     }))
                 }
@@ -171,6 +164,8 @@ export class impl implements provider.Provider {
             const toolCalls: types.OpenAIToolCall[] = []
             const toolResults: Array<{ tool_call_id: string; content: string }> = []
             let reasoningContent: string | undefined
+
+            if (message.content === null || message.content === undefined) continue
 
             for (const content of message.content) {
                 switch (content.type) {

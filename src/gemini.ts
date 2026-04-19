@@ -147,7 +147,7 @@ export class impl implements provider.Provider {
         const toolUseMap = new Map<string, string>()
 
         for (const message of messages) {
-            if (typeof message.content === 'string') continue
+            if (typeof message.content === 'string' || message.content === null) continue
 
             for (const content of message.content) {
                 if (content.type === 'tool_use') {
@@ -173,6 +173,8 @@ export class impl implements provider.Provider {
                 })
                 continue
             }
+
+            if (message.content === null) continue
 
             const modelParts: types.GeminiPart[] = []
             const userParts: types.GeminiPart[] = []
