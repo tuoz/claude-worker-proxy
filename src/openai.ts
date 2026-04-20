@@ -200,10 +200,22 @@ export class impl implements provider.Provider {
                             tool_call_id: content.tool_use_id,
                             content:
                                 typeof content.content === 'string'
-                                    ? content.content
-                                    : (content.content?.map(c => c.text).join('\n') ?? '')
+                                    ? content.content || ''
+                                    : (content.content?.map(c => c.text).join('\n') || '')
                         })
                         break
+                }
+            }
+
+            // Emit tool results before the user text message so they follow
+            // the assistant's tool_calls directly (required by OpenAI/Kimi).
+            if (message.role === 'user') {
+                for (const toolResult of toolResults) {
+                    openaiMessages.push({
+                        role: 'tool',
+                        tool_call_id: toolResult.tool_call_id,
+                        content: toolResult.content
+                    })
                 }
             }
 
@@ -236,12 +248,15 @@ export class impl implements provider.Provider {
                 })
             }
 
-            for (const toolResult of toolResults) {
-                openaiMessages.push({
-                    role: 'tool',
-                    tool_call_id: toolResult.tool_call_id,
-                    content: toolResult.content
-                })
+            // For assistant messages, emit tool results after the message itself.
+            if (message.role === 'assistant') {
+                for (const toolResult of toolResults) {
+                    openaiMessages.push({
+                        role: 'tool',
+                        tool_call_id: toolResult.tool_call_id,
+                        content: toolResult.content
+                    })
+                }
             }
         }
 
