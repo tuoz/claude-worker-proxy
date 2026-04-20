@@ -129,7 +129,7 @@ export class impl implements provider.Provider {
             if (
                 message.role === 'assistant' &&
                 message.tool_calls &&
-                (message.content === null || message.content === undefined)
+                (!message.content || message.content.length === 0)
             ) {
                 const openaiMessage: types.OpenAIMessage = {
                     role: 'assistant',
@@ -195,15 +195,23 @@ export class impl implements provider.Provider {
                             }
                         })
                         break
-                    case 'tool_result':
+                    case 'tool_result': {
+                        let toolContent =
+                            typeof content.content === 'string'
+                                ? content.content || ''
+                                : content.content
+                                      ?.filter(c => c.type === 'text')
+                                      .map(c => c.text)
+                                      .join('\n') || ''
+                        if (!toolContent && content.is_error) {
+                            toolContent = 'Tool execution failed'
+                        }
                         toolResults.push({
                             tool_call_id: content.tool_use_id,
-                            content:
-                                typeof content.content === 'string'
-                                    ? content.content || ''
-                                    : (content.content?.map(c => c.text).join('\n') || '')
+                            content: toolContent
                         })
                         break
+                    }
                 }
             }
 
