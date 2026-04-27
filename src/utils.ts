@@ -66,6 +66,36 @@ export function startTextPart(index: number): string {
     })}\n\n`
 }
 
+export function startThinkingPart(index: number): string {
+    return `event: content_block_start\ndata: ${JSON.stringify({
+        type: 'content_block_start',
+        index,
+        content_block: {
+            type: 'thinking',
+            thinking: ''
+        }
+    })}\n\n`
+}
+
+export function processThinkingDelta(text: string, index: number): string {
+    return `event: content_block_delta\ndata: ${JSON.stringify({
+        type: 'content_block_delta',
+        index,
+        delta: {
+            type: 'thinking_delta',
+            thinking: text
+        }
+    })}\n\n`
+}
+
+export function processThinkingPart(text: string, index: number): string[] {
+    const events: string[] = []
+    events.push(startThinkingPart(index))
+    events.push(processThinkingDelta(text, index))
+    events.push(stopContentBlock(index))
+    return events
+}
+
 export function processTextDelta(text: string, index: number): string {
     return `event: content_block_delta\ndata: ${JSON.stringify({
         type: 'content_block_delta',
@@ -215,6 +245,9 @@ export async function processProviderStream(
                 if (buffer.trim() && buffer.startsWith('data: ')) {
                     state = processStreamLine(buffer, state, processLine, controller, ensureMessageStart)
                 }
+                if (state.openThinkingBlockIndex !== undefined) {
+                    controller.enqueue(new TextEncoder().encode(stopContentBlock(state.openThinkingBlockIndex)))
+                }
                 if (state.openTextBlockIndex !== undefined) {
                     controller.enqueue(new TextEncoder().encode(stopContentBlock(state.openTextBlockIndex)))
                 }
@@ -239,6 +272,7 @@ export async function processProviderStream(
 export interface ProviderStreamState {
     nextBlockIndex: number
     openTextBlockIndex?: number
+    openThinkingBlockIndex?: number
     stopReason?: string
     usage?: {
         input_tokens?: number
@@ -247,6 +281,13 @@ export interface ProviderStreamState {
     toolCalls?: Record<number, { id?: string; name?: string; arguments: string }>
     events?: string[]
     model?: string
+}
+
+export function closeThinkingIfOpen(state: ProviderStreamState, events: string[]): void {
+    if (state.openThinkingBlockIndex !== undefined) {
+        events.push(stopContentBlock(state.openThinkingBlockIndex))
+        state.openThinkingBlockIndex = undefined
+    }
 }
 
 function processStreamLine(

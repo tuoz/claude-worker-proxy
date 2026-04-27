@@ -62,7 +62,11 @@ export interface ClaudeResponse {
     type: 'message'
     role: 'assistant'
     model?: string
-    content: Array<{ type: 'text'; text: string } | { type: 'tool_use'; id: string; name: string; input: any }>
+    content: Array<
+        | { type: 'text'; text: string }
+        | { type: 'tool_use'; id: string; name: string; input: any }
+        | { type: 'thinking'; thinking: string }
+    >
     stop_reason?: 'end_turn' | 'tool_use' | 'max_tokens'
     usage?: {
         input_tokens: number
@@ -136,15 +140,17 @@ export interface ClaudeStreamEvent {
         | 'message_stop'
     message?: Partial<ClaudeResponse>
     content_block?: {
-        type: 'text' | 'tool_use'
+        type: 'text' | 'tool_use' | 'thinking'
         text?: string
+        thinking?: string
         id?: string
         name?: string
         input?: any
     }
     delta?: {
-        type: 'text_delta' | 'input_json_delta'
+        type: 'text_delta' | 'input_json_delta' | 'thinking_delta'
         text?: string
+        thinking?: string
         partial_json?: string
     }
     index?: number
@@ -223,6 +229,7 @@ export interface OpenAIStreamChoice {
     delta: {
         role?: string
         content?: string
+        reasoning_content?: string | null
         tool_calls?: Array<{
             index: number
             id?: string

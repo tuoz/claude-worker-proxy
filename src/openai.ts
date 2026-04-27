@@ -153,10 +153,18 @@ export class impl implements provider.Provider {
             }
 
             if (typeof message.content === 'string') {
-                openaiMessages.push({
-                    role: message.role === 'assistant' ? 'assistant' : 'user',
-                    content: message.content
-                })
+                if (message.role === 'assistant' && isThinkingEnabled) {
+                    openaiMessages.push({
+                        role: 'assistant',
+                        content: message.content,
+                        reasoning_content: ' '
+                    })
+                } else {
+                    openaiMessages.push({
+                        role: message.role === 'assistant' ? 'assistant' : 'user',
+                        content: message.content
+                    })
+                }
                 continue
             }
 
@@ -309,6 +317,13 @@ export class impl implements provider.Provider {
             const choice = openaiData.choices[0]
             const message = choice.message
 
+            if (typeof message.reasoning_content === 'string' && message.reasoning_content.length > 0) {
+                claudeResponse.content.push({
+                    type: 'thinking',
+                    thinking: message.reasoning_content
+                })
+            }
+
             if (typeof message.content === 'string') {
                 claudeResponse.content.push({
                     type: 'text',
@@ -411,7 +426,17 @@ export class impl implements provider.Provider {
             const choice = openaiData.choices[0]
             const delta = choice.delta
 
+            if (typeof delta.reasoning_content === 'string' && delta.reasoning_content.length > 0) {
+                if (nextState.openThinkingBlockIndex === undefined) {
+                    nextState.openThinkingBlockIndex = nextState.nextBlockIndex
+                    nextState.nextBlockIndex++
+                    events.push(utils.startThinkingPart(nextState.openThinkingBlockIndex))
+                }
+                events.push(utils.processThinkingDelta(delta.reasoning_content, nextState.openThinkingBlockIndex))
+            }
+
             if (delta.content) {
+                utils.closeThinkingIfOpen(nextState, events)
                 if (nextState.openTextBlockIndex === undefined) {
                     nextState.openTextBlockIndex = nextState.nextBlockIndex
                     nextState.nextBlockIndex++
@@ -437,6 +462,7 @@ export class impl implements provider.Provider {
             }
 
             if (choice.finish_reason === 'tool_calls' && nextState.toolCalls) {
+                utils.closeThinkingIfOpen(nextState, events)
                 if (nextState.openTextBlockIndex !== undefined) {
                     events.push(utils.stopContentBlock(nextState.openTextBlockIndex))
                     nextState.openTextBlockIndex = undefined
