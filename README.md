@@ -6,6 +6,8 @@
 
 ## 快速部署
 
+[![Deploy to Cloudflare](https://deploy.workers.cloudflare.com/button)](https://deploy.workers.cloudflare.com/?url=https://github.com/tuoz/claude-worker-proxy)
+
 ### 1. 部署 Worker
 
 ```bash
